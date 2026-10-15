@@ -2,6 +2,7 @@ import os
 import asyncio
 import logging
 import sqlite3
+import threading
 import httpx
 from aiohttp import web
 from telegram import Update, InlineKeyboardButton, InlineKeyboardMarkup
@@ -21,14 +22,14 @@ logging.basicConfig(
 )
 
 # --- CREDENTIALS CONFIGURATION ---
-BOT_TOKEN = "8715702102:" + "AAGw5tfP_N73d9rm4RSA1L6Jic1LVsoLjjw"
+BOT_TOKEN = "8715702102:AAGw5tfP_N73d9rm4RSA1L6Jic1LVsoLjjw"
 ADMIN_ID = 7946253154
 UOTP_API_KEY = "45l5Co5a0s27NrIxnYQUa1SnmVPUJM3XS9fyXiSv"
 UPI_IDS = ["abhishekzz@fam", "abhishek0912@fam"]
 
 FOOTER_TEXT = "\n\n━━━━━━━━━━━━━━━━━━━━\n⚡ <b>Fast OTP Store | Owner: @abhisxhxz</b>"
 
-# Popular services & updated selling prices (+₹10 added)
+# Popular services & selling prices (+₹10 added)
 DEFAULT_SERVICES = {
     "whatsapp": {"name": "WhatsApp", "price": 30},
     "telegram": {"name": "Telegram", "price": 35},
@@ -108,7 +109,6 @@ def update_user_balance(user_id, amount):
     conn.commit()
     conn.close()
 
-# In-memory context tracking
 USER_STATES = {}
 
 # --- KEYBOARDS ---
@@ -120,7 +120,6 @@ def main_menu_keyboard():
             InlineKeyboardButton("👤 My Wallet", callback_data="menu_wallet"),
         ],
         [
-            InlineKeyboardButton("📜 Active Orders", callback_data="menu_orders"),
             InlineKeyboardButton("📞 Support", url="https://t.me/abhisxhxz"),
         ]
     ])
@@ -140,7 +139,7 @@ def buy_services_keyboard():
     keyboard.append([InlineKeyboardButton("🔙 Main Menu", callback_data="menu_home")])
     return InlineKeyboardMarkup(keyboard)
 
-# --- HANDLERS ---
+# --- TELEGRAM BOT HANDLERS ---
 async def start(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user = update.effective_user
     bal = get_user_balance(user.id, user.username or user.first_name)
@@ -232,7 +231,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.edit_text("⏳ <i>Purchasing fresh virtual number from API...</i>", parse_mode=ParseMode.HTML)
 
-        # Call UOTP API
         async with httpx.AsyncClient(timeout=25.0) as client:
             try:
                 res = await client.post(
@@ -279,7 +277,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
             await query.message.edit_text(text, reply_markup=kb, parse_mode=ParseMode.HTML)
         else:
-            err = res_data.get("message", "Temporary stock unavailable. Please try after 1 minute.")
+            err = res_data.get("message", "Temporary stock unavailable. Please try again.")
             text = (
                 f"❌ <b>Purchase Failed:</b> {err}\n\n"
                 "Aapka koi balance deduct nahi hua hai."
@@ -335,7 +333,7 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
             ])
             await query.message.edit_text(success_text, reply_markup=kb, parse_mode=ParseMode.HTML)
         else:
-            await query.answer("📭 Abhi tak OTP nahi aaya. Kripya 15-20 second baad dobara refresh karein.", show_alert=True)
+            await query.answer("📭 Abhi tak OTP nahi aaya. Kripya thoda wait karke refresh karein.", show_alert=True)
 
     elif data.startswith("cnc_"):
         order_id = int(data.replace("cnc_", ""))
@@ -412,7 +410,6 @@ async def callbacks(update: Update, context: ContextTypes.DEFAULT_TYPE):
 
         await query.message.edit_text(f"❌ <b>REJECTED!</b> Deposit #{dep_id} was declined.", parse_mode=ParseMode.HTML)
 
-# --- TEXT / MESSAGE LISTENER (SEARCH & UTR SUBMISSIONS) ---
 async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
     user_id = update.effective_user.id
     text = update.message.text.strip()
@@ -476,7 +473,6 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             if query in s_info["name"].lower() or query in s_id:
                 matched.append((s_id, s_info))
 
-        # Agar matching nahi milti ya nayi app hai toh flat ₹18 set
         if not matched:
             matched.append((query, {"name": text.capitalize(), "price": DEFAULT_SEARCH_PRICE}))
 
@@ -491,7 +487,7 @@ async def handle_user_text(update: Update, context: ContextTypes.DEFAULT_TYPE):
             parse_mode=ParseMode.HTML
         )
 
-# --- BACKGROUND AUTO-POLL FOR ACTIVE ORDERS ---
+# --- BACKGROUND OTP CHECKER ---
 async def background_otp_checker(app):
     while True:
         await asyncio.sleep(8)
@@ -499,4 +495,11 @@ async def background_otp_checker(app):
             conn = sqlite3.connect(DB_FILE)
             c = conn.cursor()
             c.execute("SELECT id, user_id, number_id, phone_number, service FROM orders WHERE status = 'ACTIVE'")
-            active_orders = c.fetch
+            active_orders = c.fetchall()
+            conn.close()
+
+            for order in active_orders:
+                o_id, u_id, num_id, phone, srv = order
+                async with httpx.AsyncClient(timeout=15.0) as client:
+                    try:
+                        res = await client.get(f"{BASE_API_
